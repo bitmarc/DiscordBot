@@ -8,6 +8,8 @@ import discord
 from faker import Faker
 from discord.ext import commands
 from googletrans import Translator
+import asyncpg
+import datetime
 
 
 translator = Translator()
@@ -26,12 +28,24 @@ CHANNEL_CODES=int(os.getenv('CANAL_CODIGOS'))
 # ROLES
 ROLE_NEW=int(os.getenv('ROL_NUEVO'))
 ROLE_MEMBER=int(os.getenv('ROL_MIEMBRO'))
+ROLE_ADMIN=int(os.getenv('ROL_ADMIN'))
 
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True
 bot = commands.Bot(command_prefix='$', intents=intents)
 
+DB_CONFIG = {
+    "user": os.getenv('DB_USER'),
+    "password": os.getenv('DB_PASSWORD'),
+    "database": os.getenv('DB_DATABASE'),
+    "host": os.getenv('DB_HOST'),  # o IP/hostname de tu servidor
+    "port": int(os.getenv('DB_PORT'))
+}
+
+# Conexión global
+db_pool = None
 
 # Comando de configuracion
 @bot.command(name="soy")
@@ -40,7 +54,7 @@ async def configurar(ctx, trainer: str = None, code: str = None, team: str = Non
 
     # 1. Validar canal
     if ctx.channel.id != CHANNEL_SETUP:
-        return await ctx.send("❌ Este comando solo se puede usar en el canal autorizado., "+str(ctx.channel.id))
+        return await ctx.send("❌ Este comando solo se puede usar en el canal autorizado.")
 
     # 2. Validar rol
     role_verificacion = ctx.guild.get_role(ROLE_NEW)
@@ -64,7 +78,7 @@ async def configurar(ctx, trainer: str = None, code: str = None, team: str = Non
     else:
         await ctx.send("⚠️ No se encontró el rol extra en el servidor.")
     
-    # 5. Mandar datos a canal de logs
+    # 5. Mandar datos a canal de codigos
     canal_log = bot.get_channel(CHANNEL_CODES)
     if canal_log:
         await canal_log.send(
@@ -75,11 +89,105 @@ async def configurar(ctx, trainer: str = None, code: str = None, team: str = Non
         )
 
     # 6. Bienvenida como miembro oficial
-    canal_log = bot.get_channel(CHANNEL_WELLCOME)
-    if canal_log:
-        await canal_log.send(
+    canal_bienvenida = bot.get_channel(CHANNEL_WELLCOME)
+    if canal_bienvenida:
+        await canal_bienvenida.send(
             f"👤 **{ctx.author.mention}** Haora eres un miembro oficial de la comunidad!! 🍾🎉🎊"
         )
+
+    # 7. Guardar en PostgreSQL
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO trainers (user_id, username, trainer, code, config_date)
+            VALUES ($1, $2, $3, $4, $5)
+            """,
+            ctx.author.id,
+            str(ctx.author),  # Nombre#tag
+            trainer,
+            code,
+            datetime.datetime.now()
+        )
+
+
+@bot.command(name="lista-codigos")
+async def configurar(ctx, trainer: str = None, code: str = None, team: str = None):
+    """Comando para ver toda la lista de codigos"""
+
+    # 1. Validar canal
+    if ctx.channel.id != CHANNEL_CODES:
+        return await ctx.send("❌ Este comando solo se puede usar en el canal autorizado.")
+
+    # # 2. Validar rol
+    role_verificacion = ctx.guild.get_role(ROLE_ADMIN)
+    if role_verificacion not in ctx.author.roles:
+        return await ctx.send("❌ No tienes el rol requerido para usar este comando.")
+
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT trainer, code
+            FROM trainers
+            ORDER BY config_date DESC
+            """
+        )
+
+    if not rows:
+        return await ctx.send("⚠️ No hay codigos en la base de datos.")
+
+    description = ""
+    for r in rows:
+        description += (
+            f"👤 **{r['trainer']}** | 🔢 Código: `{r['code']}`\n"
+        )
+
+    # Si el texto es demasiado largo, truncamos
+    if len(description) > 4000:
+        description = description[:4000] + "\n... (resultado truncado)"
+
+    embed = discord.Embed(
+        title="📋 Lista de codigos de amigo",
+        description=description,
+        color=discord.Color.green()
+    )
+
+    await ctx.send(embed=embed)
+
+@bot.command(name="codigo-entrenador")
+async def verconfig(ctx, trainer:str = None):
+    """Muestra informacion de codigo de un miembro o entrenador"""
+
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT user_id, username, trainer, code, config_date
+            FROM trainers
+            WHERE trainer = $1
+            ORDER BY config_date DESC
+            LIMIT 1
+            """,
+            trainer
+        )
+
+    if row:
+        # Embed bonito para mostrar los datos
+        embed = discord.Embed(
+            title="📋 Datos del entronador",
+            color=discord.Color.blue()
+        )
+        usuario = ctx.guild.get_member(row["user_id"])
+        nombre = usuario.display_name if usuario else f"ID:{row['user_id']}"
+        embed.add_field(name="👤 Usuario", value=nombre, inline=False)
+        embed.add_field(name="📝 Entrandor", value=row["trainer"], inline=True)
+        embed.add_field(name="🔢 Código", value=row["code"], inline=True)
+        embed.add_field(
+            name="📅 Fecha de configuración",
+            value=row["config_date"].strftime("%Y-%m-%d %H:%M:%S"),
+            inline=False
+        )
+        await ctx.send(embed=embed)
+    else:
+        await ctx.send(f"⚠️ No encontré datos para {trainer}.")
 
 
 @bot.command()
@@ -173,6 +281,8 @@ async def error_type(ctx, error):
 
 @bot.event
 async def on_ready():
+    global db_pool
+    db_pool = await asyncpg.create_pool(**DB_CONFIG, min_size=3, max_size=4)
     print(f'Estamos dentro! {bot.user}')
 
 
