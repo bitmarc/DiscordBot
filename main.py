@@ -74,7 +74,7 @@ async def configurar(ctx, trainer: str = None, code: str = None, team: str = Non
     if new_role and current_role:
         await ctx.author.add_roles(new_role)
         await ctx.author.remove_roles(current_role)
-        await ctx.send(f"✅ {ctx.author.mention}, has sido configurado con el nombre de entrenador **{trainer}** y código **{code}**. Haora eres {role_extra.name}!!")
+        await ctx.send(f"✅ {ctx.author.mention}, has sido configurado con el nombre de entrenador **{trainer}** y código **{code}**. Haora eres {new_role.name}!!")
     else:
         await ctx.send("⚠️ No se encontró el rol extra en el servidor.")
     
@@ -157,6 +157,12 @@ async def configurar(ctx, trainer: str = None, code: str = None, team: str = Non
 async def verconfig(ctx, trainer:str = None):
     """Muestra informacion de codigo de un miembro o entrenador"""
 
+
+    # # 2. Validar rol
+    role_verificacion = ctx.guild.get_role(ROLE_ADMIN)
+    if role_verificacion not in ctx.author.roles:
+        return await ctx.send("❌ No tienes el rol requerido para usar este comando.")
+
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
             """
@@ -192,6 +198,12 @@ async def verconfig(ctx, trainer:str = None):
 
 @bot.command()
 async def poke(ctx, arg):
+    # Validar rol
+    role_verificacion_1 = ctx.guild.get_role(ROLE_MEMBER)
+    role_verificacion_2 = ctx.guild.get_role(ROLE_ADMIN)
+    if role_verificacion_1 not in ctx.author.roles or role_verificacion_2 not in ctx.author.roles:
+        return await ctx.send("❌ No tienes el rol requerido para usar este comando.")
+    
     try:
         pokemon = arg.split(' ',1)[0].lower()
         result = requests.get(f'{API_POKEMON}/{pokemon}')
@@ -213,6 +225,12 @@ async def error_type(ctx, error):
 
 @bot.command()
 async def clean(ctx):
+
+    # Validar rol
+    role_verificacion = ctx.guild.get_role(ROLE_ADMIN)
+    if role_verificacion not in ctx.author.roles:
+        return await ctx.send("❌ No tienes el rol requerido para usar este comando.")
+    
     await ctx.channel.purge()
     await ctx.send(f'Messages removed', delete_after=3)
 
@@ -288,9 +306,11 @@ async def on_ready():
 
 @bot.event
 async def on_member_join(member):
-
+    print("nuevo miembro...")
     # Asignar rol
-    role = member.guild.get_role(ROLE_NEW)
+    # role = member.guild.get_role(ROLE_NEW)
+    role = discord.utils.get(member.guild.roles, name='Nuevo')
+
     if role:
         await member.add_roles(role)
         print(f"Rol {role.name} asignado a {member.name}")
@@ -304,12 +324,13 @@ async def on_member_join(member):
 
     # Mandar mensaje de bienvenida
     c_inicio = bot.get_channel(CHANNEL_WELLCOME)
+    print("nuevo miembro...", c_inicio)
     if c_inicio:
         await c_inicio.send(
             f'👋 Bienvenido al servidor {member.mention}, antes de darte acceso ' +
             f'a todas las caracteristicas del servidor, por favor te invito a pasar '+
-            f'a leer nuestra normativa en <#{c_reglas}> y configurar ' +
-            f'tu perfil en <#{c_setup}>'
+            f'a leer nuestra normativa en el canal <#{CHANNEL_RULES}> y configurar ' +
+            f'tu perfil en el canal <#{CHANNEL_SETUP}> '
             )
     else:
         print("Canal de bienvenida no encontrado.")
